@@ -1,6 +1,6 @@
 # Exported from:        http://localhost:5516/
 # Release version:      22.0.1
-# Date created:         Fri Nov 04 14:30:02 UTC 2022
+# Date created:         Fri Nov 04 15:19:11 UTC 2022
 
 ---
 apiVersion: xl-release/v1
@@ -33,7 +33,7 @@ spec:
 - pattern: Allianz Pattern
   description: Checks if Everything is ready for PROD
   stages:
-  - stage: EverythingPreProd
+  - stage: preProdStage
     transition:
       name: New Transition
       type: delivery.Transition
@@ -45,7 +45,7 @@ spec:
           operator: AND
           conditions:
           - type: delivery.ItemsCompletionCondition
-  - stage: DeliverIntoProduction
+  - stage: startedProdStage
     transition:
       name: New Transition
       type: delivery.Transition
@@ -57,7 +57,7 @@ spec:
           operator: AND
           conditions:
           - type: delivery.ItemsCompletionCondition
-  - stage: RunningInProd
+  - stage: finishedProdStage
 - template: TestConnections
   scheduledStartDate: 2022-10-28T07:00:00Z
   phases:
@@ -181,25 +181,45 @@ spec:
     - name: FindOrCreateDelivery
       type: delivery.FindOrCreateDelivery
       fallback: true
-      ^title: AllianDeliveryForXDProject
+      ^title: AllianzDeliveryForXDProject
       pattern: ./Allianz Pattern
       folder: ./
+      owner: admin
       variableMapping:
         pythonScript.deliveryId: "${deliveryId}"
     - name: GetJIRADetails
       type: jira.Query
       jiraServer: Allianz JIRA Demo
-      query: project = XLR-Demo-01
+      query: project = "XD0"
+      owner: admin
       variableMapping:
         pythonScript.issues: "${issuesList}"
+    - name: ConfirmTickets
+      type: xlrelease.UserInputTask
+      owner: admin
+      variables:
+      - issuesList
+    - name: extract ids from Map
+      type: xlrelease.ScriptTask
+      owner: admin
+      script: |-
+        keysList = list(releaseVariables['issuesList'].keys())
+        print(keysList)
+        releaseVariables['issuesKeyList']=keysList
+        print('transformed successfull map into list')
     - name: "RegisterJIRAIssuesInDelivery ${deliveryId}"
       type: delivery.RegisterTrackedItems
+      delivery: "${deliveryId}"
+      owner: admin
+      variableMapping:
+        pythonScript.trackedItems: "${issuesKeyList}"
     - name: Promote to QA
       type: continuum.PromoteAPackage
       continuumServer: DeliverInsights
       package: PostgresOnPremAllianzDC
       phase_name: UAT
       revision: "${revisionNumber}"
+      owner: admin
     color: '#3d6c9e'
   - phase: QA
     tasks:
@@ -212,24 +232,52 @@ spec:
       package: PostgresOnPremAllianzDC
       phase_name: PRODUCTION
       revision: "${revisionNumber}"
+      owner: admin
+    - name: MarkAsCompleted
+      type: delivery.MarkTrackedItems
+      stage: "${preProdStage}"
+      delivery: "${deliveryId}"
+      variableMapping:
+        pythonScript.trackedItems: "${issuesKeyList}"
     color: '#3d6c9e'
   - phase: PROD
+    tasks:
+    - name: MarkAsStartedInProd
+      type: delivery.MarkTrackedItems
+      stage: "${startedProdStage}"
+      precedingStages: true
+      delivery: "${deliveryId}"
+      variableMapping:
+        pythonScript.trackedItems: "${issuesKeyList}"
+    - name: doProdStuff
+      type: xlrelease.Task
+      owner: admin
     color: '#3d6c9e'
   - phase: CleanUp
     tasks:
     - name: wee
       type: xlrelease.Task
+      owner: admin
+    - name: MarkAsFinishedInProd
+      type: delivery.MarkTrackedItems
+      stage: "${finishedProdStage}"
+      precedingStages: true
+      delivery: "${deliveryId}"
+      variableMapping:
+        pythonScript.trackedItems: "${issuesKeyList}"
     - name: RemoveRevision
       type: continuum.DeliverRevision
       continuumServer: DeliverInsights
       package: PostgresOnPremAllianzDC
       revision: "${revisionNumber}"
+      owner: admin
     - name: CloseDeliveryByScript
       type: xlrelease.ScriptTask
+      owner: admin
       script: |-
-        delivery = deliveryApi.getDelivery(“${deliveryId}“)
+        delivery = deliveryApi.getDelivery("${deliveryId}")
         lastStage = delivery.stages[-1]
-        print(“Closing last Stage %s and completing Delivery %s” %(lastStage.title, delivery.title))
+        print("Closing last Stage %s and completing Delivery %s" %(lastStage.title, delivery.title))
         deliveryApi.completeStage(lastStage.id)
     color: '#3d6c9e'
   variables:
@@ -253,6 +301,32 @@ spec:
     key: issuesList
     requiresValue: false
     showOnReleaseStart: false
+  - type: xlrelease.ListStringVariable
+    key: issuesKeyList
+    requiresValue: false
+    showOnReleaseStart: false
+    label: IssuesKeyList
+  - type: xlrelease.StringVariable
+    key: preProdStage
+    requiresValue: false
+    showOnReleaseStart: false
+    label: preProdStage
+    description: preProdStage
+    value: preProdStage
+  - type: xlrelease.StringVariable
+    key: startedProdStage
+    requiresValue: false
+    showOnReleaseStart: false
+    label: startedProdStage
+    description: startedProdStage
+    value: startedProdStage
+  - type: xlrelease.StringVariable
+    key: finishedProdStage
+    requiresValue: false
+    showOnReleaseStart: false
+    label: finishedProdStage
+    description: finishedProdStage
+    value: finishedProdStage
   scriptUsername: admin
   scriptUserPassword: !value "xlrelease_Release_simple_demo_template_scriptUserPassword"
   riskProfile: Default risk profile
@@ -279,7 +353,7 @@ spec:
   organization: XLR-Allianz-demo
   repositoryName: demo-5
   branch: main
-  commitId: 494bbb449e29b31dbe46613eb793a351ea721211
+  commitId: 10f44002c72d12e97e87e226a75fb8ffa45df9c0
 - directory: CentralTemplateFolder
   children:
   - name: JenkinsProjectXY
